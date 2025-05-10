@@ -1,0 +1,49 @@
+
+namespace tb {
+
+graph SmoothedGain(int numChannels) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    input smoothedGainParameter.volume;
+
+    node smoothedGainParameter = std::levels::SmoothedGainParameter;
+    
+    connection in * smoothedGainParameter.gain -> out;
+}
+
+}
+
+processor InvertPolarities(int numChannels) {
+    output stream float<numChannels> out;
+    input stream float<numChannels> in;
+
+    float<numChannels> gains;
+
+    void init() {
+        std::random::RNG rng;
+        rng.seed(0); // Set the seed to a fixed value for consistency
+        for (clamp<numChannels> i)
+            gains[i] = rng.getInt32() % 2 == 0 ? 1.f : -1.f;
+    }
+
+    void main() {
+        loop {
+            let inverted = in * gains;
+            out <- inverted;
+            advance();
+        }
+    }
+}
+
+graph glint [[ main ]] {
+    input stream float<2> in;
+    output stream float<2> out;
+
+    input gain.volume;
+
+    node gain = tb::SmoothedGain(2);
+
+    connection in -> InvertPolarities(2) -> gain.in;
+    connection gain.out -> out;
+}

@@ -1,0 +1,13 @@
+
+{
+    "CmajorVersion":    1,
+    "ID":               "com.tadmn.glint",
+    "version":          "1.0.0",
+    "name":             "glint",
+    "description":      "glint",
+    "category":         "generator",
+    "manufacturer":     "tadmn",
+    "isInstrument":     true,
+
+    "source":           "glint.cmajor"
+}
