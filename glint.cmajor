@@ -12,28 +12,105 @@ graph SmoothedGain(int numChannels) {
     connection in * smoothedGainParameter.gain -> out;
 }
 
+graph StereoMerge {
+    input stream float inLeft;
+    input stream float inRight;
+
+    output stream float<2> out;
+
+    connection float<2>(inLeft, inRight) -> out;
+}
+
+graph FanOut(int numOut) {
+    input stream float in;
+    output stream float<numOut> out;
+    connection float<numOut>(in) -> out;
+}
+
+graph FanIn(int numIn) {
+    input stream float<numIn> in;
+    output stream float out;
+    connection sum(in) -> out;
+}
+
+}
+
+processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    let maxDelaySize = int(maxDelayMilliSeconds * 0.001f * processor.frequency);
+
+    struct Delay {
+        void initialize(int size) {
+            this.write = wrap<maxDelaySize>(size);
+            this.read = 0;
+            this.buffer = (0);
+        }
+
+        float process(float in) {
+            let r = this.buffer[this.read++];
+            this.buffer[this.write++] = in;
+            return r;
+        }
+
+        wrap<maxDelaySize> read, write;
+        float[maxDelaySize] buffer;
+    }
+
+    Delay[numChannels] delays;
+
+    void init() {
+        std::random::RNG rng;
+        rng.seed(1618);
+        for (clamp<numChannels> c)
+            delays[c].initialize(int(rng.getFloat(float(maxDelaySize))));
+    }
+
+    void main() {
+        loop {
+            float<numChannels> v;
+            for (clamp<numChannels> c)
+                v[c] = float(delays[c].process(in[c]));
+
+            out <- v;
+
+            advance();
+        }
+    }
 }
 
 processor InvertPolarities(int numChannels) {
-    output stream float<numChannels> out;
     input stream float<numChannels> in;
+    output stream float<numChannels> out;
 
     float<numChannels> gains;
 
     void init() {
         std::random::RNG rng;
-        rng.seed(0); // Set the seed to a fixed value for consistency
+        rng.seed(1618); // Set the seed to a fixed value for consistency
         for (clamp<numChannels> i)
-            gains[i] = rng.getInt32() % 2 == 0 ? 1.f : -1.f;
+            gains[i] = rng.getUnipolar() > 0.5f ? 1.f : -1.f;
     }
 
     void main() {
         loop {
-            let inverted = in * gains;
-            out <- inverted;
+            let v = in * gains;
+            out <- v;
             advance();
         }
     }
+}
+
+graph SingleChannelDiffuser(int numChannels) {
+    input stream float in;
+    output stream float out;
+
+    // todo: added in a safety gain here because of loud summing
+    connection 
+    in * (1.f / numChannels) -> tb::FanOut(numChannels) ->
+    MultiChannelDelay(numChannels, 40) -> InvertPolarities(numChannels) ->
+    tb::FanIn(numChannels) -> out;
 }
 
 graph glint [[ main ]] {
@@ -42,8 +119,21 @@ graph glint [[ main ]] {
 
     input gain.volume;
 
-    node gain = tb::SmoothedGain(2);
+    let N = 32;
 
-    connection in -> InvertPolarities(2) -> gain.in;
-    connection gain.out -> out;
+    node {
+        diffuserLeft = SingleChannelDiffuser(N);
+        diffuserRight = SingleChannelDiffuser(N);
+        sm = tb::StereoMerge;
+        gain = tb::SmoothedGain(2);
+    }
+
+    connection {
+        float(in[0]) -> diffuserLeft.in;
+        float(in[1]) -> diffuserRight.in;
+        diffuserLeft -> sm.inLeft;
+        diffuserRight -> sm.inRight;
+        sm.out -> gain.in;
+        gain.out -> out;
+    }
 }
