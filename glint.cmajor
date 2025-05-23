@@ -39,11 +39,11 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
-    let maxDelaySize = int(maxDelayMilliSeconds * 0.001f * processor.frequency);
+    let maxDelay = int(maxDelayMilliSeconds * 0.001f * processor.frequency);
 
     struct Delay {
         void initialize(int size) {
-            this.write = wrap<maxDelaySize>(size);
+            this.write = wrap<maxDelay>(size);
             this.read = 0;
             this.buffer = (0);
         }
@@ -54,8 +54,8 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
             return r;
         }
 
-        wrap<maxDelaySize> read, write;
-        float[maxDelaySize] buffer;
+        wrap<maxDelay> read, write;
+        float[maxDelay] buffer;
     }
 
     Delay[numChannels] delays;
@@ -63,8 +63,12 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     void init() {
         std::random::RNG rng;
         rng.seed(1618);
-        for (clamp<numChannels> c)
-            delays[c].initialize(int(rng.getFloat(float(maxDelaySize))));
+        for (clamp<numChannels> c) {
+            let min = maxDelay * c / numChannels;
+            let max = maxDelay * (c + 1) / numChannels;
+            let delaySize = int(min + rng.getUnipolar() * (max - min));
+            delays[c].initialize(delaySize);
+        }
     }
 
     void main() {
@@ -74,7 +78,6 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
                 v[c] = float(delays[c].process(in[c]));
 
             out <- v;
-
             advance();
         }
     }
