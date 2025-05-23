@@ -39,6 +39,8 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
+    input event float delayIn;
+
     let maxDelay = int(maxDelayMilliSeconds * 0.001f * processor.frequency);
 
     struct Delay {
@@ -46,6 +48,10 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
             this.write = wrap<maxDelay>(size);
             this.read = 0;
             this.buffer = (0);
+        }
+
+        void setDelay(int size) {
+            this.write = wrap<maxDelay>(this.read + size);
         }
 
         float process(float in) {
@@ -60,15 +66,25 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
 
     Delay[numChannels] delays;
 
-    void init() {
+    event delayIn(float d) {
+        updateDelays(d);
+    }
+
+    void updateDelays(float maxDelayMilliSeconds) {
         std::random::RNG rng;
         rng.seed(1618);
+        let maxDelaySamples = maxDelayMilliSeconds * 0.001f * processor.frequency;
         for (clamp<numChannels> c) {
-            let min = maxDelay * c / numChannels;
-            let max = maxDelay * (c + 1) / numChannels;
+            let min = maxDelaySamples * c / numChannels;
+            let max = maxDelaySamples * (c + 1) / numChannels;
             let delaySize = int(min + rng.getUnipolar() * (max - min));
-            delays[c].initialize(delaySize);
+            delays[c].setDelay(delaySize);
         }
+    }
+
+    void init() {
+        for (clamp<numChannels> c)
+            delays[c].initialize(maxDelay);
     }
 
     void main() {
@@ -105,15 +121,24 @@ processor InvertPolarities(int numChannels) {
     }
 }
 
-graph Diffuser(int numChannels) {
+graph Diffuser(int numChannels, float maxDiffuserDelay) {
     input stream float in;
     output stream float out;
 
+    input delay.delayIn;
+
+    node {
+        fanOut = tb::FanOut(numChannels);
+        delay = MultiChannelDelay(numChannels, maxDiffuserDelay);
+        invert = InvertPolarities(numChannels);
+        fanIn = tb::FanIn(numChannels);
+    }
+
     // todo: added in a safety gain here because of loud summing
-    connection 
-    in * (1.f / numChannels) -> tb::FanOut(numChannels) ->
-    MultiChannelDelay(numChannels, 40) -> InvertPolarities(numChannels) ->
-    tb::FanIn(numChannels) -> out;
+    connection {
+        in * (1.f / numChannels) -> fanOut -> delay.in;
+        delay.out -> invert -> fanIn -> out;
+    }
 }
 
 graph glint [[ main ]] {
@@ -122,21 +147,28 @@ graph glint [[ main ]] {
 
     input gain.volume;
 
-    let N = 32;
+    input event float diffuserDelay
+        [[ name: "Diffuser Delay", unit: "ms", min:  0, max: kMaxDiffuserDelay, init: 10 ]];
+
+    let kMaxDiffuserDelay = 150;
+    let kNumDiffuserChannels = 64;
 
     node {
-        diffuserLeft = Diffuser(N);
-        diffuserRight = Diffuser(N);
-        sm = tb::StereoMerge;
+        diffuserLeft = Diffuser(kNumDiffuserChannels, kMaxDiffuserDelay);
+        diffuserRight = Diffuser(kNumDiffuserChannels, kMaxDiffuserDelay);
+        stereoMerge = tb::StereoMerge;
         gain = tb::SmoothedGain(2);
     }
 
     connection {
         float(in[0]) -> diffuserLeft.in;
         float(in[1]) -> diffuserRight.in;
-        diffuserLeft -> sm.inLeft;
-        diffuserRight -> sm.inRight;
-        sm.out -> gain.in;
+        diffuserLeft -> stereoMerge.inLeft;
+        diffuserRight -> stereoMerge.inRight;
+        stereoMerge.out -> gain.in;
         gain.out -> out;
+
+        diffuserDelay -> diffuserLeft.delayIn;
+        diffuserDelay -> diffuserRight.delayIn;
     }
 }
