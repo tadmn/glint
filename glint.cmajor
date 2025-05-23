@@ -35,33 +35,34 @@ graph FanIn(int numIn) {
 
 }
 
+namespace glint {
+
+let kRngSeed = 1618;
+
 processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
     input event float delayIn;
 
-    let maxDelay = int(maxDelayMilliSeconds * 0.001f * processor.frequency);
+    let maxDelay = int(maxDelayMilliSeconds * 0.001 * processor.frequency);
 
     struct Delay {
-        void initialize(int size) {
-            this.write = wrap<maxDelay>(size);
-            this.read = 0;
-            this.buffer = (0);
-        }
-
         void setDelay(int size) {
-            this.write = wrap<maxDelay>(this.read + size);
+            this.smoother.setTarget(float(size), int(0.1 * processor.frequency));
         }
 
         float process(float in) {
-            let r = this.buffer[this.read++];
+            let delayAmount = roundToInt(this.smoother.getNext());
+            let readIndex = wrap<maxDelay>(this.write + delayAmount);
+            let r = this.buffer[readIndex];
             this.buffer[this.write++] = in;
             return r;
         }
 
-        wrap<maxDelay> read, write;
+        wrap<maxDelay> write;
         float[maxDelay] buffer;
+        std::smoothing::SmoothedValue smoother;
     }
 
     Delay[numChannels] delays;
@@ -72,7 +73,7 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
 
     void updateDelays(float maxDelayMilliSeconds) {
         std::random::RNG rng;
-        rng.seed(1618);
+        rng.seed(kRngSeed);
         let maxDelaySamples = maxDelayMilliSeconds * 0.001f * processor.frequency;
         for (clamp<numChannels> c) {
             let min = maxDelaySamples * c / numChannels;
@@ -80,11 +81,6 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
             let delaySize = int(min + rng.getUnipolar() * (max - min));
             delays[c].setDelay(delaySize);
         }
-    }
-
-    void init() {
-        for (clamp<numChannels> c)
-            delays[c].initialize(maxDelay);
     }
 
     void main() {
@@ -107,7 +103,7 @@ processor InvertPolarities(int numChannels) {
 
     void init() {
         std::random::RNG rng;
-        rng.seed(1618); // Set the seed to a fixed value for consistency
+        rng.seed(kRngSeed);
         for (clamp<numChannels> i)
             gains[i] = rng.getUnipolar() > 0.5f ? 1.f : -1.f;
     }
@@ -134,7 +130,6 @@ graph Diffuser(int numChannels, float maxDiffuserDelay) {
         fanIn = tb::FanIn(numChannels);
     }
 
-    // todo: added in a safety gain here because of loud summing
     connection {
         in * (1.f / numChannels) -> fanOut -> delay.in;
         delay.out -> invert -> fanIn -> out;
@@ -151,7 +146,7 @@ graph glint [[ main ]] {
         [[ name: "Diffuser Delay", unit: "ms", min:  0, max: kMaxDiffuserDelay, init: 10 ]];
 
     let kMaxDiffuserDelay = 150;
-    let kNumDiffuserChannels = 64;
+    let kNumDiffuserChannels = 32;
 
     node {
         diffuserLeft = Diffuser(kNumDiffuserChannels, kMaxDiffuserDelay);
@@ -171,4 +166,6 @@ graph glint [[ main ]] {
         diffuserDelay -> diffuserLeft.delayIn;
         diffuserDelay -> diffuserRight.delayIn;
     }
+}
+
 }
