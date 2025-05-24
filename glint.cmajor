@@ -1,83 +1,122 @@
 
 namespace tb {
 
-graph SmoothedGain(int numChannels) {
-    input stream float<numChannels> in;
-    output stream float<numChannels> out;
-
-    input smoothedGainParameter.volume;
-
-    node smoothedGainParameter = std::levels::SmoothedGainParameter;
-    
-    connection in * smoothedGainParameter.gain -> out;
-}
-
-graph StereoMerge {
-    input stream float inLeft;
-    input stream float inRight;
-
-    output stream float<2> out;
-
-    connection float<2>(inLeft, inRight) -> out;
-}
-
 graph FanOut(int numOut) {
     input stream float in;
     output stream float<numOut> out;
     connection float<numOut>(in) -> out;
 }
 
-graph FanIn(int numIn) {
+graph AveragedSum(int numIn) {
     input stream float<numIn> in;
     output stream float out;
-    connection sum(in) -> out;
+
+    let gain = 1.f / sqrt(float(numIn));
+
+    float averagedSum(float<numIn> a) {
+        return sum(a) * gain;
+    }
+
+    connection averagedSum(in) -> out;
+}
+
+processor HouseholderMatrixMixer(int size) {
+    input stream float<size> in;
+    output stream float<size> out;
+
+    let normFactor = -2.f / float(size);
+
+    void main() {
+        loop {
+            var v = in;
+
+            float sum;
+            for (clamp<size> i)
+                sum += v[i];
+
+            sum *= normFactor;
+            
+            for (clamp<size> i)
+                v[i] += sum;
+
+            out <- v;
+
+            advance();
+        }
+    }
+}
+
+processor HadamardMatrixMixer(int size) {
+    input stream float<size> in;
+    output stream float<size> out;
+
+    let normFactor = sqrt(1.f / float(size));
+
+    void main() {
+        loop {
+            var data = in;
+
+            // Iterate through all levels of the transform
+            // Start with blocks of size 2, then 4, 8, etc.
+            for (int blockSize = 2; blockSize <= size; blockSize *= 2) {
+                let halfBlock = blockSize / 2;
+
+                // Process all blocks of current size
+                for (int blockStart = 0; blockStart < size; blockStart += blockSize) {
+                    // Combine the two halves of this block
+                    for (int i = 0; i < halfBlock; ++i) {
+                        let a = data.at(blockStart + i);
+                        let b = data.at(blockStart + i + halfBlock);
+                        data.at(blockStart + i) = (a + b);
+                        data.at(blockStart + i + halfBlock) = (a - b);
+                    }
+                }
+            }
+
+            for (clamp<size> c)
+                data[c] *= normFactor;
+
+            out <- data;
+
+            advance();
+        }
+    }
 }
 
 }
 
 namespace glint {
 
-let kRngSeed = 1618;
-
 processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
-
-    input event float delayIn;
 
     let maxDelay = int(maxDelayMilliSeconds * 0.001 * processor.frequency);
 
     struct Delay {
         void setDelay(int size) {
-            this.smoother.setTarget(float(size), int(0.1 * processor.frequency));
+            this.write = this.read + wrap<maxDelay>(size);
         }
 
         float process(float in) {
-            let delayAmount = roundToInt(this.smoother.getNext());
-            let readIndex = wrap<maxDelay>(this.write + delayAmount);
-            let r = this.buffer[readIndex];
+            let v = this.buffer[this.read++];
             this.buffer[this.write++] = in;
-            return r;
+            return v;
         }
 
+        wrap<maxDelay> read;
         wrap<maxDelay> write;
         float[maxDelay] buffer;
-        std::smoothing::SmoothedValue smoother;
     }
 
     Delay[numChannels] delays;
 
-    event delayIn(float d) {
-        updateDelays(d);
-    }
-
-    void updateDelays(float maxDelayMilliSeconds) {
+    void init() {
         std::random::RNG rng;
-        rng.seed(kRngSeed);
-        let maxDelaySamples = maxDelayMilliSeconds * 0.001f * processor.frequency;
+        rng.seed(processor.id);
         for (clamp<numChannels> c) {
-            let min = maxDelaySamples * c / numChannels;
-            let max = maxDelaySamples * (c + 1) / numChannels;
+            let min = maxDelay * c / numChannels;
+            let max = maxDelay * (c + 1) / numChannels;
             let delaySize = int(min + rng.getUnipolar() * (max - min));
             delays[c].setDelay(delaySize);
         }
@@ -87,7 +126,7 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
         loop {
             float<numChannels> v;
             for (clamp<numChannels> c)
-                v[c] = float(delays[c].process(in[c]));
+                v[c] = delays[c].process(in[c]);
 
             out <- v;
             advance();
@@ -95,22 +134,25 @@ processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
     }
 }
 
-processor InvertPolarities(int numChannels) {
+processor Invert(int numChannels) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
-    float<numChannels> gains;
+    float[numChannels] gains;
 
     void init() {
         std::random::RNG rng;
-        rng.seed(kRngSeed);
-        for (clamp<numChannels> i)
-            gains[i] = rng.getUnipolar() > 0.5f ? 1.f : -1.f;
+        rng.seed(processor.id);
+        for (clamp<numChannels> c)
+            gains[c] = rng.getUnipolar() > 0.5f ? 1.f : -1.f;
     }
 
     void main() {
         loop {
-            let v = in * gains;
+            float<numChannels> v;
+            for (clamp<numChannels> c)
+                v[c] = in[c] * gains[c];
+
             out <- v;
             advance();
         }
@@ -118,53 +160,96 @@ processor InvertPolarities(int numChannels) {
 }
 
 graph Diffuser(int numChannels, float maxDiffuserDelay) {
-    input stream float in;
-    output stream float out;
-
-    input delay.delayIn;
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
 
     node {
-        fanOut = tb::FanOut(numChannels);
         delay = MultiChannelDelay(numChannels, maxDiffuserDelay);
-        invert = InvertPolarities(numChannels);
-        fanIn = tb::FanIn(numChannels);
+        invert = Invert(numChannels);
+        matrix = tb::HadamardMatrixMixer(numChannels);
     }
 
     connection {
-        in * (1.f / numChannels) -> fanOut -> delay.in;
-        delay.out -> invert -> fanIn -> out;
+        in -> delay -> matrix -> invert -> out;
     }
+}
+
+graph DiffuserChain(int numChannels) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    node {
+        d1 = Diffuser(numChannels, 48);
+        d2 = Diffuser(numChannels, 96);
+        d3 = Diffuser(numChannels, 192);
+        d4 = Diffuser(numChannels, 384);
+        d5 = Diffuser(numChannels, 768);
+    }
+
+    connection {
+        in -> d1 -> d2 -> d3 -> d4 -> d5 -> out;
+    }
+}
+
+graph FeedbackChain(int numChannels) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    node {
+        delay = MultiChannelDelay(numChannels, 150.f);
+        matrix = tb::HouseholderMatrixMixer(numChannels);
+        gain = std::levels::ConstantGain(float<numChannels>, 0.85f);
+    }
+
+    connection {
+        in -> delay.in;
+        delay.out -> [1] -> gain -> matrix -> delay.in;
+        delay.out -> out;
+    }
+}
+
+graph Reverb {
+    input stream float in;
+    output stream float out;
+
+    let numChannels = 16;
+
+    node {
+        fanOut = tb::FanOut(numChannels);
+        diffuser = DiffuserChain(numChannels);
+        feedback = FeedbackChain(numChannels);
+        sum = tb::AveragedSum(numChannels);
+    }
+
+    connection in -> fanOut -> diffuser -> feedback -> sum -> out;
 }
 
 graph glint [[ main ]] {
     input stream float<2> in;
     output stream float<2> out;
 
+    input value float mixAmount [[ name: "Mix", unit: "%", min: 0, max: 100, init: 20 ]];
     input gain.volume;
 
-    input event float diffuserDelay
-        [[ name: "Diffuser Delay", unit: "ms", min:  0, max: kMaxDiffuserDelay, init: 10 ]];
-
-    let kMaxDiffuserDelay = 150;
-    let kNumDiffuserChannels = 32;
-
     node {
-        diffuserLeft = Diffuser(kNumDiffuserChannels, kMaxDiffuserDelay);
-        diffuserRight = Diffuser(kNumDiffuserChannels, kMaxDiffuserDelay);
-        stereoMerge = tb::StereoMerge;
-        gain = tb::SmoothedGain(2);
+        reverb = Reverb[2];
+        reverbGain = std::levels::ConstantGain(float<2>, 0.6f);
+        mix = std::mixers::Interpolator(float<2>, 100.f);
+        gain = std::levels::SmoothedGain(float<2>);
     }
 
     connection {
-        float(in[0]) -> diffuserLeft.in;
-        float(in[1]) -> diffuserRight.in;
-        diffuserLeft -> stereoMerge.inLeft;
-        diffuserRight -> stereoMerge.inRight;
-        stereoMerge.out -> gain.in;
-        gain.out -> out;
+        mixAmount -> mix.mix;
 
-        diffuserDelay -> diffuserLeft.delayIn;
-        diffuserDelay -> diffuserRight.delayIn;
+        in -> mix.in1;
+
+        float(in[0]) -> reverb[0].in;
+        float(in[1]) -> reverb[1].in;
+
+        float<2>(reverb[0].out, reverb[1].out) -> reverbGain -> mix.in2;
+        
+        mix.out -> gain.in;
+        gain.out -> out;
     }
 }
 
