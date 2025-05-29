@@ -55,15 +55,9 @@ processor HadamardMatrixMixer(int size) {
     void main() {
         loop {
             var data = in;
-
-            // Iterate through all levels of the transform
-            // Start with blocks of size 2, then 4, 8, etc.
             for (int blockSize = 2; blockSize <= size; blockSize *= 2) {
                 let halfBlock = blockSize / 2;
-
-                // Process all blocks of current size
                 for (int blockStart = 0; blockStart < size; blockStart += blockSize) {
-                    // Combine the two halves of this block
                     for (int i = 0; i < halfBlock; ++i) {
                         let a = data.at(blockStart + i);
                         let b = data.at(blockStart + i + halfBlock);
@@ -83,42 +77,61 @@ processor HadamardMatrixMixer(int size) {
     }
 }
 
+namespace delay(int maxDelay) {
+
+struct Delay {
+    void setDelay(int size) {
+        this.write = this.read + wrap<maxDelay>(size);
+    }
+
+    float process(float in) {
+        let v = this.buffer[this.read++];
+        this.buffer[this.write++] = in;
+        return v;
+    }
+
+    wrap<maxDelay> read;
+    wrap<maxDelay> write;
+    float[maxDelay] buffer;
+}
+
+}
+
 }
 
 namespace glint {
 
-processor MultiChannelDelay(int numChannels, float maxDelayMilliSeconds) {
+enum Step { diffusion, feedback }
+
+processor MultiChannelDelay(Step step, int numChannels, float maxDelay_ms) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
-    let maxDelay = int(maxDelayMilliSeconds * 0.001 * processor.frequency);
+    input event float delay_ms;
 
-    struct Delay {
-        void setDelay(int size) {
-            this.write = this.read + wrap<maxDelay>(size);
-        }
+    let maxDelay = int(maxDelay_ms * 0.001 * processor.frequency);
 
-        float process(float in) {
-            let v = this.buffer[this.read++];
-            this.buffer[this.write++] = in;
-            return v;
-        }
+    tb::delay(maxDelay)::Delay[numChannels] delays;
 
-        wrap<maxDelay> read;
-        wrap<maxDelay> write;
-        float[maxDelay] buffer;
+    event delay_ms(float d) {
+        setDelay(d);
     }
 
-    Delay[numChannels] delays;
-
-    void init() {
-        std::random::RNG rng;
-        rng.seed(processor.id);
-        for (clamp<numChannels> c) {
-            let min = maxDelay * c / numChannels;
-            let max = maxDelay * (c + 1) / numChannels;
-            let delaySize = int(min + rng.getUnipolar() * (max - min));
-            delays[c].setDelay(delaySize);
+    void setDelay(float delay_ms) {
+        let delay = int(delay_ms * 0.001 * processor.frequency);
+        if (step == Step::diffusion) {
+            std::random::RNG rng;
+            rng.seed(processor.id);
+            for (clamp<numChannels> c) {
+                let min = delay * c / numChannels;
+                let max = delay * (c + 1) / numChannels;
+                delays[c].setDelay(int(min + rng.getUnipolar() * (max - min)));
+            }
+        } else if (step == Step::feedback) {
+            for (clamp<numChannels> c) {
+                let r = c * 1.f / numChannels;
+                delays[c].setDelay(int(pow(2.f, r) * delay));
+            }
         }
     }
 
@@ -163,83 +176,119 @@ graph Diffuser(int numChannels, float maxDiffuserDelay) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
+    input event float delay_ms;
+
     node {
-        delay = MultiChannelDelay(numChannels, maxDiffuserDelay);
+        delay = MultiChannelDelay(Step::diffusion, numChannels, maxDiffuserDelay);
         invert = Invert(numChannels);
         matrix = tb::HadamardMatrixMixer(numChannels);
     }
 
     connection {
-        in -> delay -> matrix -> invert -> out;
-    }
-}
-
-graph DiffuserChain(int numChannels) {
-    input stream float<numChannels> in;
-    output stream float<numChannels> out;
-
-    node {
-        d1 = Diffuser(numChannels, 48);
-        d2 = Diffuser(numChannels, 96);
-        d3 = Diffuser(numChannels, 192);
-        d4 = Diffuser(numChannels, 384);
-        d5 = Diffuser(numChannels, 768);
-    }
-
-    connection {
-        in -> d1 -> d2 -> d3 -> d4 -> d5 -> out;
-    }
-}
-
-graph FeedbackChain(int numChannels) {
-    input stream float<numChannels> in;
-    output stream float<numChannels> out;
-
-    node {
-        delay = MultiChannelDelay(numChannels, 150.f);
-        matrix = tb::HouseholderMatrixMixer(numChannels);
-        gain = std::levels::ConstantGain(float<numChannels>, 0.85f);
-    }
-
-    connection {
+        delay_ms -> delay.delay_ms;
         in -> delay.in;
-        delay.out -> [1] -> gain -> matrix -> delay.in;
+        delay.out -> matrix -> invert -> out;
+    }
+}
+
+graph DiffuserChain(int numChannels, float maxDelay_ms) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    input event float delay_ms;
+
+    node {
+        d1 = Diffuser(numChannels, maxDelay_ms);
+        d2 = Diffuser(numChannels, maxDelay_ms);
+        d3 = Diffuser(numChannels, maxDelay_ms);
+        d4 = Diffuser(numChannels, maxDelay_ms);
+    }
+
+    connection {
+        delay_ms -> d1.delay_ms;
+        delay_ms -> d2.delay_ms;
+        delay_ms -> d3.delay_ms;
+        delay_ms -> d4.delay_ms;
+
+        in -> d1.in;
+        d1.out -> d2.in;
+        d2.out -> d3.in;
+        d3.out -> d4.in;
+        d4.out -> out;
+    }
+}
+
+graph FeedbackChain(int numChannels, float maxDelay_ms) {
+    input stream float<numChannels> in;
+    output stream float<numChannels> out;
+
+    input event float delay_ms;
+    input event float feedbackGain;
+
+    node {
+        delay = MultiChannelDelay(Step::feedback, numChannels, maxDelay_ms);
+        matrix = tb::HouseholderMatrixMixer(numChannels);
+        gain = std::smoothing::SmoothedValueStream;
+    }
+
+    connection {
+        delay_ms -> delay.delay_ms;
+        feedbackGain -> gain.in;
+        in -> delay.in;
+        (delay.out * gain.out) -> [1] -> matrix -> delay.in;
         delay.out -> out;
     }
 }
 
-graph Reverb {
+graph Reverb(float maxDelay_ms) {
     input stream float in;
     output stream float out;
+
+    input event float delay_ms;
+    input event float feedbackGain;
 
     let numChannels = 16;
 
     node {
         fanOut = tb::FanOut(numChannels);
-        diffuser = DiffuserChain(numChannels);
-        feedback = FeedbackChain(numChannels);
+        diffuser = DiffuserChain(numChannels, maxDelay_ms);
+        feedback = FeedbackChain(numChannels, maxDelay_ms);
         sum = tb::AveragedSum(numChannels);
     }
 
-    connection in -> fanOut -> diffuser -> feedback -> sum -> out;
+    connection {
+        delay_ms -> diffuser.delay_ms;
+        delay_ms -> feedback.delay_ms;
+
+        feedbackGain -> feedback.feedbackGain;
+        in -> fanOut -> diffuser.in;
+        diffuser.out -> feedback.in;
+        feedback.out -> sum -> out;
+    }
 }
 
 graph glint [[ main ]] {
     input stream float<2> in;
     output stream float<2> out;
 
-    input value float mixAmount [[ name: "Mix", unit: "%", min: 0, max: 100, init: 20 ]];
+    input event float feedbackGain [[ name: "Feedback", min: 0.4, max: 0.93, init: 0.5 ]];
+    input event float delay_ms [[ name: "Delay", unit: "ms", min: 5, max: kMaxDelay_ms, init: 50 ]];
+    input value float mix_pct [[ name: "Mix", unit: "%", min: 0, max: 100, init: 20 ]];
     input gain.volume;
 
+    let kMaxDelay_ms = 150.f;
+
     node {
-        reverb = Reverb[2];
+        reverb = Reverb(kMaxDelay_ms)[2];
         reverbGain = std::levels::ConstantGain(float<2>, 0.6f);
         mix = std::mixers::Interpolator(float<2>, 100.f);
         gain = std::levels::SmoothedGain(float<2>);
     }
 
     connection {
-        mixAmount -> mix.mix;
+        delay_ms -> reverb.delay_ms;
+        feedbackGain -> reverb.feedbackGain;
+        mix_pct -> mix.mix;
 
         in -> mix.in1;
 
