@@ -224,18 +224,28 @@ graph FeedbackChain(int numChannels, float maxDelay_ms) {
 
     input event float delay_ms;
     input event float feedbackGain;
+    input event float hiCut_Hz;
+    input event float loCut_Hz;
+
+    namespace filters = std::filters(float<numChannels>)::tpt::onepole;
 
     node {
         delay = MultiChannelDelay(Step::feedback, numChannels, maxDelay_ms);
         matrix = tb::HouseholderMatrixMixer(numChannels);
         gain = std::smoothing::SmoothedValueStream;
+        hiCut = filters::Processor(filters::Mode::lowPass);
+        loCut = filters::Processor(filters::Mode::highpass);
     }
 
     connection {
         delay_ms -> delay.delay_ms;
+        hiCut_Hz -> hiCut.frequency;
+        loCut_Hz -> loCut.frequency;
         feedbackGain -> gain.in;
         in -> delay.in;
-        (delay.out * gain.out) -> [1] -> matrix -> delay.in;
+        (delay.out * gain.out) -> [1] -> loCut.in;
+        loCut.out -> hiCut.in;
+        hiCut.out -> matrix -> delay.in;
         delay.out -> out;
     }
 }
@@ -246,8 +256,10 @@ graph Reverb(float maxDelay_ms) {
 
     input event float delay_ms;
     input event float feedbackGain;
+    input event float hiCut_Hz;
+    input event float loCut_Hz;
 
-    let numChannels = 16;
+    let numChannels = 8;
 
     node {
         fanOut = tb::FanOut(numChannels);
@@ -260,6 +272,9 @@ graph Reverb(float maxDelay_ms) {
         delay_ms -> diffuser.delay_ms;
         delay_ms -> feedback.delay_ms;
 
+        hiCut_Hz -> feedback.hiCut_Hz;
+        loCut_Hz -> feedback.loCut_Hz;
+
         feedbackGain -> feedback.feedbackGain;
         in -> fanOut -> diffuser.in;
         diffuser.out -> feedback.in;
@@ -271,23 +286,35 @@ graph glint [[ main ]] {
     input stream float<2> in;
     output stream float<2> out;
 
-    input event float feedbackGain [[ name: "Feedback", min: 0.4, max: 0.93, init: 0.5 ]];
-    input event float delay_ms [[ name: "Delay", unit: "ms", min: 5, max: kMaxDelay_ms, init: 50 ]];
+    input event float delay_ms [[ name: "Delay", unit: "ms", min: 5, max: kMaxDelay_ms, init: 28 ]];
+    input event float feedbackGain [[ name: "Feedback", min: 0.5, max: 0.93, init: 0.82 ]];
+    input event float feedbackLoCut_Hz [[ name: "FB Lo Cut", unit: "Hz", min: 10, max: 1000, init: 100 ]];
+    input event float feedbackHiCut_Hz [[ name: "FB Hi Cut", unit: "Hz", min: 300, max: 20000, init: 2000 ]];
+    input event float loCut_Hz [[ name: "Lo Cut", unit: "Hz", min: 10, max: 1000, init: 70 ]];
+    input event float hiCut_Hz [[ name: "Hi Cut", unit: "Hz", min: 300, max: 20000, init: 3000 ]];
     input value float mix_pct [[ name: "Mix", unit: "%", min: 0, max: 100, init: 20 ]];
     input gain.volume;
 
     let kMaxDelay_ms = 150.f;
 
+    namespace filters = std::filters(float<2>)::tpt::onepole;
+
     node {
         reverb = Reverb(kMaxDelay_ms)[2];
         reverbGain = std::levels::ConstantGain(float<2>, 0.6f);
+        hiCut = filters::Processor(filters::Mode::lowPass);
+        loCut = filters::Processor(filters::Mode::highpass);
         mix = std::mixers::Interpolator(float<2>, 100.f);
         gain = std::levels::SmoothedGain(float<2>);
     }
 
     connection {
         delay_ms -> reverb.delay_ms;
+        feedbackLoCut_Hz -> reverb.loCut_Hz;
+        feedbackHiCut_Hz -> reverb.hiCut_Hz;
         feedbackGain -> reverb.feedbackGain;
+        loCut_Hz -> loCut.frequency;
+        hiCut_Hz -> hiCut.frequency;
         mix_pct -> mix.mix;
 
         in -> mix.in1;
@@ -295,7 +322,9 @@ graph glint [[ main ]] {
         float(in[0]) -> reverb[0].in;
         float(in[1]) -> reverb[1].in;
 
-        float<2>(reverb[0].out, reverb[1].out) -> reverbGain -> mix.in2;
+        float<2>(reverb[0].out, reverb[1].out) -> reverbGain -> loCut.in;
+        loCut.out -> hiCut.in;
+        hiCut.out -> mix.in2;
         
         mix.out -> gain.in;
         gain.out -> out;
