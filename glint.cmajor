@@ -95,6 +95,40 @@ struct Delay {
     float[maxDelay] buffer;
 }
 
+struct FractionalDelay {
+    void setDelay(float delayAmount) {
+        this.delay = delayAmount;
+    }
+
+    float process(float in) {
+        float read = float(this.write) - this.delay;
+        if (read < 0.f)
+            read += float(maxDelay);
+
+        int r0 = int(floor(read));
+
+        int r1 = int(ceil(read));
+        if (r1 == maxDelay)
+            r1 = 0;
+
+        float f0 = this.buffer.at(r0);
+        float f1 = this.buffer.at(r1);
+
+        float frac = this.delay % 1.f;
+
+        float interpolated = lerp(f0, f1, frac);
+
+        this.buffer[this.write] = in;
+        this.write++;
+
+        return interpolated;
+    }
+
+    float delay;
+    wrap<maxDelay> write;
+    float[maxDelay] buffer;
+}
+
 }
 
 }
@@ -111,7 +145,7 @@ processor MultiChannelDelay(Step step, int numChannels, float maxDelay_ms) {
 
     let maxDelay = int(maxDelay_ms * 0.001 * processor.frequency);
 
-    tb::delay(maxDelay)::Delay[numChannels] delays;
+    tb::delay(maxDelay)::FractionalDelay[numChannels] delays;
 
     event delay_ms(float d) {
         setDelay(d);
@@ -125,12 +159,12 @@ processor MultiChannelDelay(Step step, int numChannels, float maxDelay_ms) {
             for (clamp<numChannels> c) {
                 let min = delay * c / numChannels;
                 let max = delay * (c + 1) / numChannels;
-                delays[c].setDelay(int(min + rng.getUnipolar() * (max - min)));
+                delays[c].setDelay(min + rng.getUnipolar() * (max - min));
             }
         } else if (step == Step::feedback) {
             for (clamp<numChannels> c) {
                 let r = c * 1.f / numChannels;
-                delays[c].setDelay(int(pow(2.f, r) * delay));
+                delays[c].setDelay(pow(2.f, r) * delay);
             }
         }
     }
