@@ -109,7 +109,7 @@ processor MultiChannelDelay(Step step, int numChannels, float maxDelay_ms) {
 
     input event float delay_ms;
 
-    let maxDelay = int(maxDelay_ms * 0.001 * processor.frequency);
+    let maxDelay = int(maxDelay_ms * 0.001 * processor.maxFrequency);
 
     tb::delay(maxDelay)::Delay[numChannels] delays;
 
@@ -312,7 +312,7 @@ graph Reverb(float maxDelay_ms) {
     }
 }
 
-graph glint [[ main ]] {
+graph Glint [[ main ]] {
     input stream float<2> in;
     output stream float<2> out;
 

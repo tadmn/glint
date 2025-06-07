@@ -3,11 +3,11 @@
     "CmajorVersion":    1,
     "ID":               "com.tadmn.glint",
     "version":          "1.0.0",
-    "name":             "glint",
-    "description":      "glint",
+    "name":             "Glint",
+    "description":      "",
     "category":         "effect",
     "manufacturer":     "tadmn",
-    "isInstrument":     true,
+    "isInstrument":     false,
 
     "source":           "glint.cmajor"
 }
