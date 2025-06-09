@@ -1,0 +1,75 @@
+name: Glint
+
+on:
+  workflow_dispatch: # lets you run a build from the UI
+  push:
+  pull_request:
+
+# When pushing new commits, cancel any running builds on that branch
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  SCCACHE_GHA_ENABLED: true
+  SCCACHE_CACHE_MULTIARCH: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # don't double run on PRs
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+
+    steps:
+      - name: Checkout Glint
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup sccache to cache the build
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Download cmajor
+        run: |
+          curl -L -o cmajor.dmg https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.dmg
+          MOUNT_POINT=/tmp/cmajor-dmg
+          hdiutil attach cmajor.dmg -mountpoint $MOUNT_POINT -quiet
+          cp $MOUNT_POINT/cmaj /usr/local/bin/
+          cmaj --version
+
+      - name: Download JUCE repository
+        run: git clone --depth 1 https://github.com/juce-framework/JUCE.git /tmp/juce
+
+      - name: Export to JUCE project
+        run: cmaj generate --target=juce glint.cmajorpatch --output=. --jucePath=/tmp/juce
+
+      - name: Configure
+        run: >-
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE}} -G Ninja
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache .
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }}
+
+      - name: Zip Glint.vst3
+        run: cd build/Glint_artefacts/Release/VST3 && zip -r ../../../../Glint.vst3.zip Glint.vst3
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Glint-vst3-macOS-x86_64-arm64-${{ env.BUILD_TYPE }}
+          path: Glint.vst3.zip

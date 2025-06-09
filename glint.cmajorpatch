@@ -8,6 +8,10 @@
     "category":         "effect",
     "manufacturer":     "tadmn",
     "isInstrument":     false,
+    "source":           "glint.cmajor",
 
-    "source":           "glint.cmajor"
+    "plugin": {
+        "pluginCode":       "Glnt",
+        "manufacturerCode": "Tadn"
+    }
 }
