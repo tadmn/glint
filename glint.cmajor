@@ -252,7 +252,6 @@ graph FeedbackChain(int numChannels, float maxDelay_ms) {
     input event float delay_ms;
     input event float decay_s;
     input event float hiCut_Hz;
-    input event float loCut_Hz;
 
     namespace filters = std::filters(float<numChannels>)::tpt::onepole;
 
@@ -262,7 +261,6 @@ graph FeedbackChain(int numChannels, float maxDelay_ms) {
         matrix = tb::HouseholderMatrixMixer(numChannels);
         smoothedGain = std::smoothing::SmoothedValueStream;
         hiCut = filters::Processor(filters::Mode::lowPass);
-        loCut = filters::Processor(filters::Mode::highpass);
     }
 
     connection {
@@ -271,10 +269,8 @@ graph FeedbackChain(int numChannels, float maxDelay_ms) {
         decay_s -> feedbackGain.decay_s;
         feedbackGain.gain -> smoothedGain.in;
         hiCut_Hz -> hiCut.frequency;
-        loCut_Hz -> loCut.frequency;
         in -> delay.in;
-        (delay.out * smoothedGain.out) -> [1] -> loCut.in;
-        loCut.out -> hiCut.in;
+        (delay.out * smoothedGain.out) -> [1] -> hiCut.in;
         hiCut.out -> matrix -> delay.in;
         delay.out -> out;
     }
@@ -303,7 +299,6 @@ graph Reverb(float maxDelay_ms) {
         delay_ms -> feedback.delay_ms;
 
         hiCut_Hz -> feedback.hiCut_Hz;
-        loCut_Hz -> feedback.loCut_Hz;
 
         decay_s -> feedback.decay_s;
         in -> fanOut -> diffuser.in;
@@ -318,7 +313,6 @@ graph Glint [[ main ]] {
 
     input event float delay_ms [[ name: "Size", unit: "ms", min: 5, max: kMaxDelay_ms, init: 28 ]];
     input event float decay_s [[ name: "Decay", unit: "s", min: 0.1, max: 20.0, init: 8.0 ]];
-    input event float feedbackLoCut_Hz [[ name: "FB Lo Cut", unit: "Hz", min: 5, max: 1000, init: 60 ]];
     input event float feedbackHiCut_Hz [[ name: "FB Hi Cut", unit: "Hz", min: 300, max: 20000, init: 15000 ]];
     input event float loCut_Hz [[ name: "Lo Cut", unit: "Hz", min: 5, max: 1000, init: 60 ]];
     input event float hiCut_Hz [[ name: "Hi Cut", unit: "Hz", min: 300, max: 20000, init: 5000 ]];
@@ -341,7 +335,6 @@ graph Glint [[ main ]] {
     connection {
         delay_ms -> reverb.delay_ms;
         decay_s -> reverb.decay_s;
-        feedbackLoCut_Hz -> reverb.loCut_Hz;
         feedbackHiCut_Hz -> reverb.hiCut_Hz;
         loCut_Hz -> loCut.frequency;
         hiCut_Hz -> hiCut.frequency;
