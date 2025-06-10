@@ -1,11 +1,13 @@
 
 namespace tb {
 
-Type map<Type> (Type in, Type outMin, Type outMax) {
+T map<T> (T in, T outMin, T outMax) {
+    static_assert(T.isFloat);
     return outMin + in * (outMax - outMin);
 }
 
-Type map<Type> (Type in, Type inMin, Type inMax, Type outMin, Type outMax) {
+T map<T> (T in, T inMin, T inMax, T outMin, T outMax) {
+    static_assert(T.isFloat);
     return outMin + ((outMax - outMin) * (in - inMin)) / (inMax - inMin);
 }
 
