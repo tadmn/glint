@@ -1,7 +1,7 @@
 name: Glint
 
 on:
-  workflow_dispatch: # lets you run a build from the UI
+  workflow_dispatch: # Lets you run a build from the UI
   push:
   pull_request:
 
@@ -22,12 +22,12 @@ defaults:
 
 jobs:
   build:
-    # don't double run on PRs
+    # Dont double run on PRs
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      fail-fast: false # Show all errors for each platform (vs. cancel jobs on error)
       matrix:
         include:
           - name: macOS
@@ -65,11 +65,11 @@ jobs:
       - name: Build
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
-      - name: Zip Glint.vst3
-        run: cd build/Glint_artefacts/Release/VST3 && zip -r ../../../../Glint.vst3.zip Glint.vst3
+      - name: Compress artifacts
+        run: cd build/Glint_artefacts/Release && zip -r ../../../Glint.zip .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Glint-vst3-macOS-x86_64-arm64-${{ env.BUILD_TYPE }}
-          path: Glint.vst3.zip
+          name: Glint-macOS-x86_64-arm64-${{ env.BUILD_TYPE }}
+          path: Glint.zip
