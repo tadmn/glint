@@ -255,31 +255,22 @@ processor FeedbackGain {
     float mDelay_ms, mDecay_s;
 }
 
-graph DampeningControl {
-    input event float dampening_uni;
-    output event float dampening_dB;
-
-    event dampening_uni(float d) {
-        dampening_dB <- d * -0.9f;
-    }
-}
-
 graph FeedbackChain(int numChannels, float maxDelay_ms) {
     input stream float<numChannels> in;
     output stream float<numChannels> out;
 
     input event float delay_ms;
     input event float decay_s;
-    input event float dampening_uni;
+    input event float dampen_Hz;
 
-    namespace filters = std::filters(float<numChannels>)::simper;
+    namespace filters = std::filters(float<numChannels>)::tpt::onepole;
 
     node {
         delay = MultiChannelDelay(Step::feedback, numChannels, maxDelay_ms);
         feedbackGain = FeedbackGain;
         matrix = tb::HouseholderMatrixMixer(numChannels);
         smoothedGain = std::smoothing::SmoothedValueStream;
-        hiShelf = filters::Processor(filters::Mode::highShelf, 1000.f);
+        hiCut = filters::Processor(filters::Mode::lowPass);
     }
 
     connection {
@@ -287,10 +278,11 @@ graph FeedbackChain(int numChannels, float maxDelay_ms) {
         delay_ms -> feedbackGain.delay_ms;
         decay_s -> feedbackGain.decay_s;
         feedbackGain.gain -> smoothedGain.in;
-        dampening_uni -> DampeningControl -> hiShelf.gain;
+        dampen_Hz -> hiCut.frequency;
+
         in -> delay.in;
-        (delay.out * smoothedGain.out) -> [1] -> hiShelf.in;
-        hiShelf.out -> matrix -> delay.in;
+        (delay.out * smoothedGain.out) -> [1] -> hiCut.in;
+        hiCut.out -> matrix -> delay.in;
         delay.out -> out;
     }
 }
@@ -301,7 +293,7 @@ graph Reverb(float maxDelay_ms) {
 
     input event float delay_ms;
     input event float decay_s;
-    input event float dampening_uni;
+    input event float dampen_Hz;
 
     let numChannels = 32;
 
@@ -315,10 +307,9 @@ graph Reverb(float maxDelay_ms) {
     connection {
         delay_ms -> diffuser.delay_ms;
         delay_ms -> feedback.delay_ms;
-
-        dampening_uni -> feedback.dampening_uni;
-
+        dampen_Hz -> feedback.dampen_Hz;
         decay_s -> feedback.decay_s;
+
         in -> fanOut -> diffuser.in;
         diffuser.out -> feedback.in;
         feedback.out -> sum -> out;
@@ -331,9 +322,9 @@ graph Glint [[ main ]] {
 
     input event float delay_ms [[ name: "Size", unit: "ms", min: 5, max: kMaxDelay_ms, init: 28 ]];
     input event float decay_s [[ name: "Decay", unit: "s", min: 0.1, max: 20.0, init: 8.0 ]];
-    input event float dampening_uni [[ name: "Dampening", min: 0, max: 1, init: 0.3 ]];
-    input event float loCut_Hz [[ group: "EQ", name: "Lo Cut", unit: "Hz", min: 10, max: 22000, init: 60, mid: 1000 ]];
-    input event float hiCut_Hz [[ group: "EQ", name: "Hi Cut", unit: "Hz", min: 10, max: 22000, init: 3500, mid: 1000 ]];
+    input event float dampen_Hz [[ name: "Dampening", unit: "Hz", min: 1600, max: 24000, init: 16000, mid: 5740 ]];
+    input event float loCut_Hz [[ group: "EQ", name: "Lo Cut", unit: "Hz", min: 10, max: 24000, init: 800, mid: 1000 ]];
+    input event float hiCut_Hz [[ group: "EQ", name: "Hi Cut", unit: "Hz", min: 10, max: 24000, init: 3000, mid: 1000 ]];
     input value float mix_pct [[ name: "Mix", unit: "%", min: 0, max: 100, init: 35 ]];
     input gain.volume;
 
@@ -353,7 +344,7 @@ graph Glint [[ main ]] {
     connection {
         delay_ms -> reverb.delay_ms;
         decay_s -> reverb.decay_s;
-        dampening_uni -> reverb.dampening_uni;
+        dampen_Hz -> reverb.dampen_Hz;
         loCut_Hz -> loCut.frequency;
         hiCut_Hz -> hiCut.frequency;
         mix_pct -> mix.mix;
@@ -362,7 +353,6 @@ graph Glint [[ main ]] {
 
         float(in[0]) -> reverb[0].in;
         float(in[1]) -> reverb[1].in;
-
         float<2>(reverb[0].out, reverb[1].out) -> reverbGain -> loCut.in;
         loCut.out -> hiCut.in;
         hiCut.out -> mix.in2;
