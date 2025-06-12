@@ -1,0 +1,109 @@
+namespace tb {
+
+T map<T> (T in, T outMin, T outMax) {
+    static_assert(T.isFloat);
+    return outMin + in * (outMax - outMin);
+}
+
+T map<T> (T in, T inMin, T inMax, T outMin, T outMax) {
+    static_assert(T.isFloat);
+    return outMin + ((outMax - outMin) * (in - inMin)) / (inMax - inMin);
+}
+
+graph FanOut(int numOut) {
+    input stream float in;
+    output stream float<numOut> out;
+    connection float<numOut>(in) -> out;
+}
+
+graph AveragedSum(int numIn) {
+    input stream float<numIn> in;
+    output stream float out;
+
+    let gain = 1.f / sqrt(float(numIn));
+
+    float averagedSum(float<numIn> a) {
+        return sum(a) * gain;
+    }
+
+    connection averagedSum(in) -> out;
+}
+
+processor HouseholderMatrixMixer(int size) {
+    input stream float<size> in;
+    output stream float<size> out;
+
+    let normFactor = -2.f / float(size);
+
+    void main() {
+        loop {
+            var v = in;
+
+            float sum;
+            for (clamp<size> i)
+                sum += v[i];
+
+            sum *= normFactor;
+            
+            for (clamp<size> i)
+                v[i] += sum;
+
+            out <- v;
+
+            advance();
+        }
+    }
+}
+
+processor HadamardMatrixMixer(int size) {
+    input stream float<size> in;
+    output stream float<size> out;
+
+    let normFactor = sqrt(1.f / float(size));
+
+    void main() {
+        loop {
+            var data = in;
+            for (int blockSize = 2; blockSize <= size; blockSize *= 2) {
+                let halfBlock = blockSize / 2;
+                for (int blockStart = 0; blockStart < size; blockStart += blockSize) {
+                    for (int i = 0; i < halfBlock; ++i) {
+                        let a = data.at(blockStart + i);
+                        let b = data.at(blockStart + i + halfBlock);
+                        data.at(blockStart + i) = (a + b);
+                        data.at(blockStart + i + halfBlock) = (a - b);
+                    }
+                }
+            }
+
+            for (clamp<size> c)
+                data[c] *= normFactor;
+
+            out <- data;
+
+            advance();
+        }
+    }
+}
+
+namespace delay(int maxDelay) {
+
+struct Delay {
+    void setDelay(int size) {
+        this.write = this.read + wrap<maxDelay>(size);
+    }
+
+    float process(float in) {
+        let v = this.buffer[this.read++];
+        this.buffer[this.write++] = in;
+        return v;
+    }
+
+    wrap<maxDelay> read;
+    wrap<maxDelay> write;
+    float[maxDelay] buffer;
+}
+
+}
+
+}

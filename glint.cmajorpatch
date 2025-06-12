@@ -4,11 +4,11 @@
     "ID":               "com.tadmn.glint",
     "version":          "1.0.0",
     "name":             "Glint",
-    "description":      "",
+    "description":      "Cmajor implementation of Geraint Luff's Reverb",
     "category":         "effect",
     "manufacturer":     "tadmn",
     "isInstrument":     false,
-    "source":           "glint.cmajor",
+    "source": ["glint.cmajor", "tad-bits.cmajor"],
 
     "plugin": {
         "pluginCode":       "Glnt",
